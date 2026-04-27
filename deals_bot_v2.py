@@ -7,8 +7,8 @@ from bs4 import BeautifulSoup
 import json
 
 # Configuration
-TELEGRAM_TOKEN = "8339957915:AAHf3v09yGrBWzmVXR32CIhIFMCKKdM4yHw"
-CHAT_ID = "857240393"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 CHECK_INTERVAL = 900  # 15 minutes
 
 # Exclusions
