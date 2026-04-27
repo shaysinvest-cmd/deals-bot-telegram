@@ -9,6 +9,9 @@ import json
 # Configuration
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+# DEBUG
+print(f"🔧 DEBUG - Token chargé: {TELEGRAM_TOKEN[:20]}..." if TELEGRAM_TOKEN else "❌ Token VIDE")
+print(f"🔧 DEBUG - Chat ID: {CHAT_ID}")
 CHECK_INTERVAL = 900  # 15 minutes
 
 # Exclusions
