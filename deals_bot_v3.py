@@ -9,10 +9,11 @@ import json
 # Configuration
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+CHECK_INTERVAL = 900  # 15 minutes
+
 # DEBUG
 print(f"🔧 DEBUG - Token chargé: {TELEGRAM_TOKEN[:20]}..." if TELEGRAM_TOKEN else "❌ Token VIDE")
 print(f"🔧 DEBUG - Chat ID: {CHAT_ID}")
-CHECK_INTERVAL = 900  # 15 minutes
 
 # Exclusions
 EXCLUDED_KEYWORDS = [
@@ -20,7 +21,8 @@ EXCLUDED_KEYWORDS = [
     'chemise', 't-shirt', 'tshirt', 'pull', 'manteau', 'veste', 'blouson',
     'basket', 'sneaker', 'chaussette', 'lingerie', 'sous-vêtement',
     'accessoire mode', 'sac à main', 'bijou', 'montre fashion',
-    'polo', 'short', 'maillot', 'casquette', 'bonnet', 'écharpe'
+    'polo', 'short', 'maillot', 'casquette', 'bonnet', 'écharpe',
+    'sweat', 'hoodie', 'jogging', 'legging', 'combinaison', 'kimono'
 ]
 
 AMAZON_KEYWORDS = ['amazon.fr', 'amazon.com', 'amzn', 'amazon']
@@ -29,7 +31,7 @@ DIGITAL_KEYWORDS = [
     'dématérialisé', 'digital', 'téléchargement', 'download',
     'code psn', 'code steam', 'carte cadeau', 'gift card',
     'ebook', 'e-book', 'kindle', 'abonnement', 'streaming',
-    'jeu vidéo pc', 'clé cd', 'code activation'
+    'jeu vidéo pc', 'clé cd', 'code activation', 'carte prépayée'
 ]
 
 def send_telegram_message(message):
@@ -55,6 +57,13 @@ def extract_discount(text):
         return max([int(m) for m in matches])
     return 0
 
+def extract_price(text):
+    """Extrait le prix d'un texte"""
+    matches = re.findall(r'(\d+[,.]?\d*)\s*€', text)
+    if matches:
+        return matches[0] + '€'
+    return "Prix non disponible"
+
 def is_excluded(title, description="", merchant=""):
     """Vérifie si le deal doit être exclu"""
     text = (title + " " + description + " " + merchant).lower()
@@ -76,89 +85,131 @@ def is_excluded(title, description="", merchant=""):
     
     return False
 
-def check_dealabs():
-    """Scrape Dealabs - version améliorée"""
+def check_dealabs_all():
+    """Scrape la page "Tous" de Dealabs"""
     deals = []
     
     try:
+        # Page principale "Tous les deals"
+        url = "https://www.dealabs.com/nouveaux"
+        
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'fr-FR,fr;q=0.9',
+            'Referer': 'https://www.dealabs.com/'
         }
         
-        # On teste plusieurs catégories populaires
-        categories = [
-            'https://www.dealabs.com/groupe/high-tech',
-            'https://www.dealabs.com/groupe/informatique',
-            'https://www.dealabs.com/groupe/maison-jardin',
-        ]
+        print(f"   📡 URL: {url}")
+        response = requests.get(url, headers=headers, timeout=15)
+        print(f"   📊 Status: {response.status_code}")
         
-        for category_url in categories:
-            try:
-                response = requests.get(category_url, headers=headers, timeout=15)
-                
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.content, 'html.parser')
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Chercher tous les articles de deals (plusieurs sélecteurs possibles)
+            deal_containers = []
+            
+            # Méthode 1: Chercher par class contenant "thread"
+            deal_containers.extend(soup.find_all('article', class_=lambda x: x and 'thread' in str(x).lower()))
+            
+            # Méthode 2: Chercher par data-handler
+            if not deal_containers:
+                deal_containers.extend(soup.find_all('article', attrs={'data-handler': True}))
+            
+            # Méthode 3: Tous les articles
+            if not deal_containers:
+                deal_containers.extend(soup.find_all('article'))
+            
+            print(f"   📦 {len(deal_containers)} containers trouvés")
+            
+            for item in deal_containers[:30]:  # Limiter à 30 deals
+                try:
+                    # Extraire tout le texte de l'article
+                    full_text = item.get_text()
                     
-                    # Chercher les deals (structure simplifiée)
-                    deal_items = soup.find_all('article', class_=lambda x: x and 'thread' in x.lower())
+                    # Vérifier s'il y a une réduction
+                    discount = extract_discount(full_text)
                     
-                    for item in deal_items[:10]:  # Limite à 10 deals par catégorie
-                        try:
-                            # Extraire les informations
-                            title_elem = item.find('a', class_=lambda x: x and 'thread-title' in x.lower())
-                            if not title_elem:
-                                title_elem = item.find('strong')
-                            
-                            if title_elem:
-                                title = title_elem.get_text(strip=True)
-                                url = title_elem.get('href', '')
-                                if url and not url.startswith('http'):
-                                    url = 'https://www.dealabs.com' + url
-                                
-                                # Extraire le prix
-                                price_elem = item.find('span', class_=lambda x: x and 'thread-price' in x.lower())
-                                price = price_elem.get_text(strip=True) if price_elem else "Prix non disponible"
-                                
-                                # Extraire la réduction
-                                discount = extract_discount(item.get_text())
-                                
-                                # Vérifier le marchand
-                                merchant_elem = item.find('span', class_=lambda x: x and 'merchant' in x.lower())
-                                merchant = merchant_elem.get_text(strip=True) if merchant_elem else ""
-                                
-                                # Filtrer
-                                if discount >= 50 and not is_excluded(title, "", merchant):
-                                    deals.append({
-                                        'title': title[:200],  # Limiter la longueur
-                                        'price': price,
-                                        'old_price': '',
-                                        'discount': discount,
-                                        'url': url,
-                                        'source': 'Dealabs',
-                                        'merchant': merchant
-                                    })
-                        except Exception as e:
-                            continue
-                
-                time.sleep(2)  # Pause entre les requêtes
-                
-            except Exception as e:
-                print(f"Erreur catégorie {category_url}: {e}")
-                continue
+                    if discount < 50:
+                        continue
+                    
+                    # Extraire le titre
+                    title = ""
+                    title_candidates = [
+                        item.find('strong'),
+                        item.find('a', class_=lambda x: x and 'title' in str(x).lower()),
+                        item.find('span', class_=lambda x: x and 'title' in str(x).lower()),
+                        item.find('h2'),
+                        item.find('h3')
+                    ]
+                    
+                    for candidate in title_candidates:
+                        if candidate:
+                            title = candidate.get_text(strip=True)
+                            if len(title) > 10:  # Titre valide
+                                break
+                    
+                    if not title:
+                        continue
+                    
+                    # Extraire l'URL
+                    link = item.find('a', href=True)
+                    url_deal = ""
+                    if link:
+                        url_deal = link['href']
+                        if url_deal and not url_deal.startswith('http'):
+                            url_deal = 'https://www.dealabs.com' + url_deal
+                    
+                    if not url_deal:
+                        continue
+                    
+                    # Extraire le prix
+                    price = extract_price(full_text)
+                    
+                    # Extraire le marchand
+                    merchant = ""
+                    merchant_elem = item.find('span', class_=lambda x: x and 'merchant' in str(x).lower())
+                    if merchant_elem:
+                        merchant = merchant_elem.get_text(strip=True)
+                    
+                    # Si pas de marchand trouvé, chercher dans le texte
+                    if not merchant:
+                        common_merchants = ['Amazon', 'Cdiscount', 'Fnac', 'Darty', 'Boulanger', 'Leclerc', 'Carrefour', 'Auchan', 'Lidl']
+                        for m in common_merchants:
+                            if m.lower() in full_text.lower():
+                                merchant = m
+                                break
+                    
+                    # Vérifier exclusions
+                    if is_excluded(title, full_text, merchant):
+                        continue
+                    
+                    # Ajouter le deal
+                    deals.append({
+                        'title': title[:200],
+                        'price': price,
+                        'old_price': '',
+                        'discount': discount,
+                        'url': url_deal,
+                        'source': 'Dealabs',
+                        'merchant': merchant
+                    })
+                    
+                except Exception as e:
+                    continue
         
     except Exception as e:
-        print(f"Erreur générale Dealabs: {e}")
+        print(f"   ❌ Erreur Dealabs: {e}")
     
     return deals
 
 def check_pepper_deals():
-    """Alternative: Pepper.com (version internationale de Dealabs)"""
+    """Scrape Pepper.com (backup)"""
     deals = []
     
     try:
-        url = "https://www.pepper.com/hot"
+        url = "https://www.pepper.com/nouveaux"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
@@ -168,35 +219,45 @@ def check_pepper_deals():
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Structure similaire à Dealabs
             deal_items = soup.find_all('article')[:20]
             
             for item in deal_items:
                 try:
+                    full_text = item.get_text()
+                    discount = extract_discount(full_text)
+                    
+                    if discount < 50:
+                        continue
+                    
                     title_elem = item.find('strong')
+                    if not title_elem:
+                        title_elem = item.find('a')
+                    
                     if title_elem:
                         title = title_elem.get_text(strip=True)
-                        discount = extract_discount(item.get_text())
                         
-                        if discount >= 50:
-                            link = item.find('a')
-                            url = link['href'] if link else ""
-                            
-                            if not is_excluded(title):
-                                deals.append({
-                                    'title': title[:200],
-                                    'price': 'Voir site',
-                                    'old_price': '',
-                                    'discount': discount,
-                                    'url': url,
-                                    'source': 'Pepper',
-                                    'merchant': ''
-                                })
+                        if is_excluded(title, full_text):
+                            continue
+                        
+                        link = item.find('a', href=True)
+                        url_deal = link['href'] if link else ""
+                        
+                        price = extract_price(full_text)
+                        
+                        deals.append({
+                            'title': title[:200],
+                            'price': price,
+                            'old_price': '',
+                            'discount': discount,
+                            'url': url_deal,
+                            'source': 'Pepper',
+                            'merchant': ''
+                        })
                 except:
                     continue
     
     except Exception as e:
-        print(f"Erreur Pepper: {e}")
+        print(f"   ❌ Erreur Pepper: {e}")
     
     return deals
 
@@ -229,11 +290,15 @@ def main():
     print("=" * 50)
     
     # Message de démarrage
+    print("🔧 Test envoi message Telegram...")
+    test_result = send_telegram_message("🔧 TEST - Le bot démarre...")
+    print(f"Résultat: {test_result}")
+    
     send_telegram_message(
         "✅ <b>Bot Chasseur de Deals ACTIVÉ !</b>\n\n"
         "🔍 Surveillance active sur:\n"
-        "  • Dealabs\n"
-        "  • Pepper\n\n"
+        "  • Dealabs (page TOUS)\n"
+        "  • Pepper (page TOUS)\n\n"
         "💰 Seuil: -50% minimum\n"
         "🚫 Exclus: Mode • Amazon • Digital\n\n"
         "⏰ Vous recevrez les deals en temps réel !"
@@ -251,9 +316,9 @@ def main():
             
             all_deals = []
             
-            # Vérifier Dealabs
-            print("📡 Scraping Dealabs...")
-            dealabs_deals = check_dealabs()
+            # Vérifier Dealabs (page TOUS)
+            print("📡 Scraping Dealabs (page TOUS)...")
+            dealabs_deals = check_dealabs_all()
             all_deals.extend(dealabs_deals)
             print(f"   ✓ {len(dealabs_deals)} deals trouvés")
             
@@ -293,7 +358,7 @@ def main():
             else:
                 print("😴 Aucun nouveau deal pour le moment")
             
-            # Nettoyage mémoire (garde max 1000 deals)
+            # Nettoyage mémoire
             if len(seen_deals) > 1000:
                 seen_deals.clear()
                 print("🧹 Cache nettoyé")
